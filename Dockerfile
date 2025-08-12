@@ -12,7 +12,7 @@ RUN composer install --no-dev --prefer-dist --optimize-autoloader \
     && ( [ -f package.json ] && npm ci && npm run build || echo "No frontend" ) \
     && php artisan storage:link || true
 
-# ---------- Etapa 2: runtime (usa php:8.2-fpm) ----------
+# ---------- Etapa 2: runtime (usa php 8.2 fpm) ----------
 FROM php:8.2-fpm-bullseye
 
 RUN apt-get update && apt-get install -y \
@@ -20,16 +20,18 @@ RUN apt-get update && apt-get install -y \
     libzip4 libicu67 libxml2 libpng16-16 libjpeg62-turbo \
     && rm -rf /var/lib/apt/lists/*
 
-# App
-COPY --from=phpbuild /var/www/html /var/www/html
+# Trae binarios/extensiones construidos en la etapa build (opcional pero útil)
+COPY --from=phpbuild /usr/local /usr/local
 
-# Configs
+# ✅ Instala los drivers por si acaso (garantiza pdo_mysql)
+RUN docker-php-ext-install pdo pdo_mysql
+
+# App y configs
+COPY --from=phpbuild /var/www/html /var/www/html
 COPY deploy/nginx.conf.template /etc/nginx/nginx.conf.template
 COPY deploy/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY deploy/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-
-# Permisos
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 
 EXPOSE 10000
