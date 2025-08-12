@@ -11,10 +11,12 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Carbon\Carbon;
 use Barryvdh\DomPDF\Facade\Pdf;
+use App\Notifications\ProductoCreadoNotification;
+use App\Notifications\ProductoEditadoNotification;
 
 class ProductosController extends Controller
 {
-        public function index()
+    public function index()
     {
         $categorias = Categoria::all();
         $recetas = Receta::all();
@@ -59,54 +61,58 @@ class ProductosController extends Controller
     }
 
     public function store(Request $request)
-    {
-        $request->validate([
-            'nombre' => 'required|string|max:255',
-            'id_categoria' => 'required|exists:categorias,id',
-            'id_recetas' => 'required|exists:recetas,id',
-            'codigo' => 'required|string|unique:productos,codigo',
-            'stock' => 'required|integer|min:0',
-            'precio_venta' => 'required|numeric|min:0',
-            'precio_estimado' => 'nullable|numeric|min:0',
-            'imagen' => 'nullable|image|mimes:jpeg,png,jpg|max:2048',
-            'agregado' => 'nullable|date',
-            'maneja_lotes' => 'sometimes|boolean',
-            'dias_caducidad' => 'required_if:maneja_lotes,true|integer|min:1'
-        ]);
+{
+    $request->validate([
+        'nombre' => 'required|string|max:255',
+        'id_categoria' => 'required|exists:categorias,id',
+        'id_recetas' => 'required|exists:recetas,id',
+        'codigo' => 'required|string|unique:productos,codigo',
+        'stock' => 'required|integer|min:0',
+        'precio_venta' => 'required|numeric|min:0',
+        'precio_estimado' => 'nullable|numeric|min:0',
+        'imagen' => 'nullable|image|mimes:jpeg,png,jpg|max:2048',
+        'agregado' => 'nullable|date',
+        'maneja_lotes' => 'sometimes|boolean',
+        'dias_caducidad' => 'required_if:maneja_lotes,true|integer|min:1'
+    ]);
 
-        // Procesar datos del producto
-        $data = $request->except('imagen', 'maneja_lotes', 'dias_caducidad');
-        $manejaLotes = $request->has('maneja_lotes') && $request->maneja_lotes == '1';
-        $data['maneja_lotes'] = $manejaLotes;
+    // Procesar datos del producto
+    $data = $request->except('imagen', 'maneja_lotes', 'dias_caducidad');
+    $manejaLotes = $request->has('maneja_lotes') && $request->maneja_lotes == '1';
+    $data['maneja_lotes'] = $manejaLotes;
 
-        if ($request->hasFile('imagen')) {
-            $path = $request->file('imagen')->store('public/productos');
-            $data['imagen'] = str_replace('public/', 'storage/', $path);
-        }
+    if ($request->hasFile('imagen')) {
+        $path = $request->file('imagen')->store('public/productos');
+        $data['imagen'] = str_replace('public/', 'storage/', $path);
+    }
 
-        if ($request->agregado) {
-            $data['agregado'] = Carbon::parse($request->agregado)->toDateTimeString();
-        }
+    if ($request->agregado) {
+        $data['agregado'] = Carbon::parse($request->agregado)->toDateTimeString();
+    }
 
-        // Crear el producto
-        $producto = Productos::create($data);
-        
-        // Crear lote inicial si maneja lotes
-        if ($manejaLotes && $request->stock > 0) {
-            $diasCaducidad = (int)$request->dias_caducidad;
-            Lote::create([
-                'productos_id' => $producto->id,
-                'cantidad' => $request->stock,
-                'fecha_entrada' => now()->toDateString(),
-                'fecha_caducidad' => now()->addDays($diasCaducidad)->toDateString()
-            ]);
-        }
-
-        return response()->json([
-            'success' => 'Producto creado correctamente',
-            'producto' => $producto
+    // Crear el producto
+    $producto = Productos::create($data);
+    
+    // Crear lote inicial si maneja lotes
+    if ($manejaLotes && $request->stock > 0) {
+        $diasCaducidad = (int)$request->dias_caducidad;
+        Lote::create([
+            'productos_id' => $producto->id,
+            'cantidad' => $request->stock,
+            'fecha_entrada' => now()->toDateString(),
+            'fecha_caducidad' => now()->addDays($diasCaducidad)->toDateString()
         ]);
     }
+
+   // En ProductosController.php
+auth()->user()->notify(new ProductoCreadoNotification($producto, auth()->user()));
+
+    return response()->json([
+        'success' => 'Producto creado correctamente',
+        'producto' => $producto
+    ]);
+}
+
 
     public function update(Request $request, $id)
     {
@@ -125,6 +131,9 @@ class ProductosController extends Controller
         $producto = Productos::findOrFail($id);
         $stockAnterior = $producto->stock;
         $manejaLotes = $request->has('maneja_lotes') && $request->maneja_lotes == '1';
+        
+        // Guardar datos originales para comparación
+        $originalData = $producto->toArray();
         
         // Actualizar datos del producto
         $data = $request->except('imagen', 'stock', 'maneja_lotes', 'dias_caducidad');
@@ -166,6 +175,26 @@ class ProductosController extends Controller
         } else {
             // Si desactiva el manejo por lotes, eliminar todos los lotes
             $producto->lotes()->delete();
+        }
+
+        // Detectar cambios para la notificación
+        $cambios = [];
+        foreach ($request->all() as $key => $value) {
+            if (array_key_exists($key, $originalData) && $originalData[$key] != $value) {
+                $cambios[] = [
+                    'campo' => $key,
+                    'de' => $originalData[$key],
+                    'a' => $value
+                ];
+            }
+        }
+
+        // Enviar notificación si hubo cambios
+        if (!empty($cambios)) {
+            $adminUsers = User::where('rol', 'admin')->get();
+            foreach ($adminUsers as $admin) {
+                $admin->notify(new ProductoEditadoNotification($producto, $cambios, auth()->user()));
+            }
         }
 
         return response()->json([
@@ -215,14 +244,12 @@ class ProductosController extends Controller
         }
     }
 
-        // Reporte 1: Inventario general (todos los autenticados)
     public function generarReporteInventario() {
         $productos = Productos::with('categoria')->get();
         return Pdf::loadView('pdfs.inventario', compact('productos'))
                 ->download('inventario_general.pdf');
     }
 
-    // Reporte 2: Productos por caducar (vendedores + admin)
     public function generarReporteCaducidad() {
         $productos = Productos::whereHas('lotes', function($query) {
             $query->whereDate('fecha_caducidad', '<=', now()->addDays(7));
@@ -233,7 +260,6 @@ class ProductosController extends Controller
         return Pdf::loadView('pdfs.caducidad', compact('productos'))
                 ->download('productos_por_caducar.pdf');
     }
-
 
     public function generarReporteLotes() {
         if (auth()->user()->rol !== 'Administrador') {
@@ -247,23 +273,4 @@ class ProductosController extends Controller
         return Pdf::loadView('pdfs.lotes', compact('lotes'))
                 ->download('historial_lotes.pdf');
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }

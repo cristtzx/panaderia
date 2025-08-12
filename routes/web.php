@@ -39,7 +39,7 @@ Route::get('Sucursales', [SucursalController::class, 'index']);
 Route::get('Ingredientes', [IngredienteController::class, 'index']); 
 Route::get('Eliminar-Ingrediente/{id_ingrediente}', [IngredienteController::class, 'destroy']);
 Route::post('ingredientes/{id}/update-stock', [IngredienteController::class, 'updateStock']);
-
+Route::delete('/sucursales/{id}', [SucursalController::class, 'destroy'])->name('sucursales.destroy');
 
 
 
