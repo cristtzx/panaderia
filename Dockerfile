@@ -1,38 +1,51 @@
-# ---------- Etapa 1: build ----------
-FROM php:8.2-fpm-bullseye AS phpbuild
+#Usa la imagen base de PHP con Apache
+FROM php:8.1-apache
+
+# Instala dependencias del sistema y extensiones de PHP
 RUN apt-get update && apt-get install -y \
-    git unzip libzip-dev libonig-dev libxml2-dev libpq-dev libicu-dev \
-    libpng-dev libjpeg-dev libfreetype6-dev libssl-dev libcurl4-openssl-dev pkg-config \
-    && docker-php-ext-install pdo pdo_mysql zip intl gd opcache
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs
+    libpng-dev \
+    libjpeg62-turbo-dev \
+    libfreetype6-dev \
+    libonig-dev \
+    zip \
+    unzip \
+    git \
+    curl \
+    libxml2-dev \
+    libzip-dev \
+    libssl-dev \
+    libpq-dev \
+    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd xml pdo_pgsql
+
+# Instala la extensión de MongoDB
+RUN pecl install mongodb && docker-php-ext-enable mongodb
+
+# Instala Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+# Establece el directorio de trabajo
 WORKDIR /var/www/html
-COPY . /var/www/html
-RUN composer install --no-dev --prefer-dist --optimize-autoloader \
-    && ( [ -f package.json ] && npm ci && npm run build || echo "No frontend" ) \
-    && php artisan storage:link || true
 
-# ---------- Etapa 2: runtime (usa php 8.2 fpm) ----------
-FROM php:8.2-fpm-bullseye
+# Copia los archivos del proyecto
+COPY . .
 
-RUN apt-get update && apt-get install -y \
-    nginx supervisor curl ca-certificates gettext-base \
-    libzip4 libicu67 libxml2 libpng16-16 libjpeg62-turbo \
-    && rm -rf /var/lib/apt/lists/*
+# Ajusta los permisos de los archivos
+RUN chown -R www-data:www-data /var/www/html \
+    && chmod -R 755 /var/www/html/storage \
+    && chmod -R 755 /var/www/html/bootstrap/cache
 
-# Trae binarios/extensiones construidos en la etapa build (opcional pero útil)
-COPY --from=phpbuild /usr/local /usr/local
+# Instala las dependencias de Composer, incluido mongodb/mongodb
+RUN composer require mongodb/mongodb \
+    && composer install --no-dev --optimize-autoloader
 
-# ✅ Instala los drivers por si acaso (garantiza pdo_mysql)
-RUN docker-php-ext-install pdo pdo_mysql
+# Expone el puerto 80
+EXPOSE 80
 
-# App y configs
-COPY --from=phpbuild /var/www/html /var/www/html
-COPY deploy/nginx.conf.template /etc/nginx/nginx.conf.template
-COPY deploy/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY deploy/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
+# Copia la configuración de Apache
+COPY default.conf /etc/apache2/sites-available/000-default.conf
 
-EXPOSE 10000
-CMD ["/entrypoint.sh"]
+# Habilita el módulo rewrite de Apache
+RUN a2enmod rewrite
+
+# Comando para iniciar Apache
+CMD ["apache2-foreground"]
