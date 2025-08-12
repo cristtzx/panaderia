@@ -1,6 +1,4 @@
-user  www-data;
-worker_processes  auto;
-pid /run/nginx.pid;
+worker_processes auto;
 
 events { worker_connections 1024; }
 
@@ -8,29 +6,37 @@ http {
   include       /etc/nginx/mime.types;
   default_type  application/octet-stream;
   sendfile      on;
-  keepalive_timeout 65;
+  keepalive_timeout  65;
+
+  # Render inyecta PORT como env; dile a Nginx que lo use
+  env PORT;
 
   server {
-    listen ${PORT};  # Render inyecta $PORT
-    server_name _;
+    listen       ${PORT};
+    server_name  _;
 
-    root /var/www/html/public;
-    index index.php index.html;
+    root   /app/public;
+    index  index.php index.html;
+
+    client_max_body_size 100m;
 
     location / {
       try_files $uri $uri/ /index.php?$query_string;
     }
 
     location ~ \.php$ {
-      include fastcgi_params;
-      fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
-      fastcgi_pass 127.0.0.1:9000;
-      fastcgi_index index.php;
+      include        fastcgi_params;
+      fastcgi_param  SCRIPT_FILENAME  $realpath_root$fastcgi_script_name;
+      fastcgi_param  PATH_INFO        $fastcgi_path_info;
+      fastcgi_index  index.php;
+
+      # Debe alinear con PHP-FPM (ver punto 3):
+      fastcgi_pass   127.0.0.1:9000;
+      # (Si prefieres socket, cámbialo a: fastcgi_pass unix:/run/php/php8.2-fpm.sock;)
     }
 
-    location ~* \.(css|js|jpg|jpeg|png|gif|ico|svg|woff|woff2|ttf)$ {
-      expires 7d;
-      access_log off;
-    }
+    location ~ /\. { deny all; }
+    error_log  /dev/stderr warn;
+    access_log /dev/stdout;
   }
 }
